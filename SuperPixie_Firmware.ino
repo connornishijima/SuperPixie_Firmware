@@ -6,6 +6,9 @@
 //            |_|                                                       |
 //----------------------------------------------------------------------+
 
+// TODO: Add backsplash color command support to packets and CONFIG struct
+
+
 #define FIRMWARE_VERSION 10000
 
 // External dependencies
