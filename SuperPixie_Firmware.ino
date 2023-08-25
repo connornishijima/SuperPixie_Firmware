@@ -8,6 +8,8 @@
 
 // TODO: Get firmware to fully compile with all warnings treated as errors
 
+// TODO: Learn how to use AUnit or write your own unit tests for node firmware
+
 // TODO: Make firmware version available via COM_GET_VERSION packet
 #define FIRMWARE_VERSION 10000
 
