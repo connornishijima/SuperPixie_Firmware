@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      REQUIRED_LIBRARIES: FastLED, FixedPoints
+      REQUIRED_LIBRARIES: FastLED,FixedPoints
       GITHUB_TOKEN: ${{ github.token }}
 
     steps:
