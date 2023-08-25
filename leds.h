@@ -89,6 +89,7 @@ CRGB get_color(uint8_t x, uint8_t y, float brightness) {
 
   CRGB out_col;
 
+  // TODO: Implement "GRADIENT_CHAIN" color mode that uses LOCAL_ADDRESS vs. CHAIN_LENGTH to calculate what color each node of the chain should use in a horizontal context
   if (CONFIG.GRADIENT_TYPE == GRADIENT_NONE) {
     out_col.r = col_a.r;
     out_col.g = col_a.g;
@@ -171,6 +172,7 @@ void update_leds() {
 
   debug_step = 4;
   // --------------------------------------------------------
+  // TODO: Move debug led drawing to its own function
   leds[NUM_LEDS - 1] = CRGB(0, 64 * DEVICE.TOUCH_ACTIVE, 0);
 
   if(DEVICE.LOCAL_ADDRESS == ADDRESS_NULL){

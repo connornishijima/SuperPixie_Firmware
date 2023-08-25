@@ -9,7 +9,7 @@ enum commands {
   COM_ASSIGN_ADDRESS,
   COM_SET_BAUD,
   COM_SET_DEBUG_LED,
-  COM_SET_DEBUG_DIGIT,
+  COM_SET_DEBUG_DIGIT, // TODO: Remove leftover command types from early development
   COM_SET_BRIGHTNESS,
   COM_SET_COLORS,
   COM_SHOW,

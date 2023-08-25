@@ -8,6 +8,7 @@
 
 // TODO: Get firmware to fully compile with all warnings treated as errors
 
+// TODO: Make firmware version available via COM_GET_VERSION packet
 #define FIRMWARE_VERSION 10000
 
 // External dependencies
@@ -16,10 +17,7 @@
 #include <FixedPointsCommon.h>
 #include <FS.h>        
 #include <LittleFS.h> 
-
 #include <WiFi.h>
-#include "esp_wifi.h"
-
 #include <Ticker.h>
 
 // Internal dependencies
@@ -65,6 +63,7 @@ void loop() {
   yield();
 }
 
+
 void run_leds(uint32_t t_now) {
   static uint8_t iter = 0;
   iter++;
@@ -78,11 +77,8 @@ void run_leds(uint32_t t_now) {
 
   if (transition_complete == false) {
     run_transition(t_now);
-
+    
     clear_display();
-
-    //uint8_t asterisk_polygon[42] = {0,42,0,6,0,3,0,0,2,88,0,0,0,0,0,212,0,88,255,44,2,0,255,44,0,88,0,212,2,0,0,0,0,1,0,2,0,3,0,4,0,5};
-    //parse_vector_from_bytes(ascii_font, 30+30);
     debug_polygon();
 
     memcpy(mask_output, mask, sizeof(float) * (LEDS_X * LEDS_Y));
