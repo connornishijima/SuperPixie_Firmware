@@ -63,6 +63,7 @@ void loop() {
   yield();
 }
 
+// TODO: This is to test the automated removal of TODO issues by the CI bot
 
 void run_leds(uint32_t t_now) {
   static uint8_t iter = 0;
@@ -77,7 +78,7 @@ void run_leds(uint32_t t_now) {
 
   if (transition_complete == false) {
     run_transition(t_now);
-    
+
     clear_display();
     debug_polygon();
 
