@@ -8,7 +8,7 @@ on:
     - 'library.properties'
     - 'library.json'
     - 'keywords.txt'
-    - 'arduino_build.yml'
+    - '**arduino_build.yml'
   pull_request:
     paths:
     - '**.ino'
@@ -17,7 +17,7 @@ on:
     - 'library.properties'
     - 'library.json'
     - 'keywords.txt'
-    - 'arduino_build.yml'
+    - '**arduino_build.yml'
 jobs:
   build:
     name: "Arduino_Build"
