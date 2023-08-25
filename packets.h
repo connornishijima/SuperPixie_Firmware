@@ -76,6 +76,7 @@ void send_touch_event() {
   debugln(touch_data[0]);
 }
 
+// TODO: Organize packet handling code in execute_packet() to have the same order of appearance as seen in the commands.h enum
 void execute_packet(uint32_t t_now, uint8_t* buffer, uint16_t packet_id, uint16_t packet_type, bool needs_ack, uint8_t data_length_in_bytes, uint8_t data_start_position) {
   if (packet_type == COM_PROBE) {
     send_ack(packet_id);
@@ -108,13 +109,16 @@ void execute_packet(uint32_t t_now, uint8_t* buffer, uint16_t packet_id, uint16_
   else if (packet_type == COM_ASSIGN_ADDRESS) {
     DEVICE.LOCAL_ADDRESS = buffer[data_start_position + 0];
     panic = false;
+    
+    // TODO: Commands should not explicitly return ACKs on the node firmware side, just let the commander properly use the "needs_ack" flag bit when necessary
     send_ack(packet_id);
-
+    
     debug("GOT COM_ASSIGN_ADDRESS (");
     debug(DEVICE.LOCAL_ADDRESS);
     debugln(")");
   }
 
+  // TODO: Restore correct chain baud rate switching behavior
   else if (packet_type == COM_SET_BAUD) {
     uint32_t new_baud = 0;
     new_baud = (new_baud << 8) + buffer[data_start_position + 0];

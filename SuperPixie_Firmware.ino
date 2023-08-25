@@ -65,7 +65,7 @@ void loop() {
   yield();
 }
 
-
+// TODO: Move run_leds() to leds.h instead of main .ino
 void run_leds(uint32_t t_now) {
   static uint8_t iter = 0;
   iter++;
@@ -97,6 +97,8 @@ void run_leds(uint32_t t_now) {
   yield();
 }
 
+// TODO: Document all function definition locations that aren't in the current file
+// For example, calls to `run_node();` should always have a "// (system.h)" comment after them to aid with navigation.
 void loop_node(void *parameter) {
   debugln("NODE LOOP START");
   while (1) {
