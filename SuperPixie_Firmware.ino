@@ -6,6 +6,8 @@
 //            |_|                                                       |
 //----------------------------------------------------------------------+ 
 
+// TODO: Get firmware to fully compile with all warnings treated as errors
+
 #define FIRMWARE_VERSION 10000
 
 // External dependencies
@@ -138,6 +140,7 @@ void loop_leds(void *parameter) {
   }
 }
 
+// TODO: Replace stupid debug_polygon() function with better name and structure
 void debug_polygon() {
   memset(temp_mask, 0, sizeof(float)*LEDS_X*LEDS_Y);
 
