@@ -35,5 +35,6 @@ jobs:
         uses: ArminJo/arduino-test-compile@v3
         with:
           arduino-board-fqbn: "esp32:esp32:nodemcu-32s"
+          extra-arduino-cli-args: "--warnings default"
           platform-url: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_dev_index.json"
           required-libraries: ${{ env.REQUIRED_LIBRARIES }}
