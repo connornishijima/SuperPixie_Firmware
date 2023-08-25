@@ -1,6 +1,6 @@
 name: Arduino Build
 on:
-  push: # see: https://help.github.com/en/actions/reference/events-that-trigger-workflows#pull-request-event-pull_request
+  push: # see: https://help.github.com/en/actions/reference/events-that-trigger-workflows#pull-request-event-pull_request 
     paths:
     - '**.ino'
     - '**.cpp'
