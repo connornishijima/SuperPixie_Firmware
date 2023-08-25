@@ -34,8 +34,6 @@
 #include "ascii.h"
 #include "vector_drawing.h"
 
-/
-
 void setup() {
   init_system();
 
