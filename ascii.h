@@ -1,7 +1,9 @@
+// Index into the below ascii_font where you will find the ASCII character passed to lookup_ascii_address(c)
 uint16_t ascii_font_lookup_table[95] = {
   0,30,60,162,484,886,1256,1274,1348,1422,1464,1506,1572,1590,1608,1626,1844,1886,2024,2202,2248,2434,2656,2682,3084,3290,3320,3390,3416,3446,3472,3702,4196,4242,4492,4702,4836,4886,4928,5154,5204,5254,5368,5418,5444,5486,5520,5734,5876,6106,6256,6570,6604,6726,6752,6794,6836,6870,6904,6938,6956,6990,7016,7034,7052,7282,7512,7690,7920,8134,8264,8566,8696,8726,8804,8854,8920,9154,9284,9498,9712,9926,10048,10386,10428,10550,10576,10618,10660,10862,10896,10986,11004,11094,11200
 };
 
+// Compressed version of the onboard font, see load_vector_to_line_memory() for help decoding this
 uint8_t ascii_font[11158+42+18] = {
 
   // exclamation_point_polygon
@@ -290,6 +292,10 @@ uint8_t ascii_font[11158+42+18] = {
   0,18,0,2,0,1,255,156,249,92,0,100,249,92,0,0,0,1
 };
 
+
+// #############################################################################################
+// Convert an input ASCII character to the address you can find a vector drawing of that
+// character in the above font data.
 int32_t lookup_ascii_address(char c){
   if(c <= 32){
     return -1;
@@ -301,7 +307,11 @@ int32_t lookup_ascii_address(char c){
     return ascii_font_lookup_table[c-33];
   }
 }
+// #############################################################################################
 
+
+// #############################################################################################
+// Was used to generate the lookuptable above, only useful to firmware developers
 void print_lookup_table(){
   uint32_t current_index = 0;
   uint8_t num_characters = 0;
@@ -319,6 +329,7 @@ void print_lookup_table(){
     num_characters += 1;
   }
   //debugln(" ");
-  debug("NUM_CHARS: ");
-  debugln(num_characters);
+  //debug("NUM_CHARS: ");
+  //debugln(num_characters);
 }
+// #############################################################################################

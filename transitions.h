@@ -1,133 +1,163 @@
-extern int16_t get_sine_float_index(float index);
+// Instantly switch to the new system state
+void run_instant_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = 1.0;
+  CHARACTER_STATE[current_character_state].OPACITY = 0.0;
+}
 
-void run_transition(uint32_t t_now) {
-  // Simple, instant transition
-  if (CONFIG.TRANSITION_TYPE == TRANSITION_INSTANT) {
-    DEVICE.CURRENT_CHARACTER.character = DEVICE.NEW_CHARACTER.character;
-    DEVICE.CURRENT_CHARACTER.opacity = 1.0;
-    transition_complete = true;
+// Crossfade between characters
+void run_fade_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+}
+
+// Fade to black between characters
+void run_fade_out_transition(){
+  float opacity_a = 0.0;
+  float opacity_b = 0.0;
+
+  if(system_state_transition_progress < 0.5){
+    opacity_a = 0.0;
+    opacity_b = 1.0;
   }
-  
-  // Fancy transitions
-  else {
-    DEVICE.MASTER_OPACITY = 1.0;
-    DEVICE.CURRENT_CHARACTER.opacity = 1.0;
-    DEVICE.NEW_CHARACTER.opacity = 0.0;
-
-    uint32_t time_elapsed = t_now - transition_start;
-    uint32_t transition_duration = transition_end - transition_start;
-    float transition_progress = float(time_elapsed) / float(transition_duration);
-
-    // Handle potential time errors
-    if (transition_progress < 0.0) {
-      transition_progress = 0.0;
-    }
-    
-    // Transition is complete, clean up
-    else if (transition_progress >= 1.0) {
-      DEVICE.CURRENT_CHARACTER.opacity = 1.0;
-      DEVICE.NEW_CHARACTER.opacity = 0.0;
-
-      DEVICE.CURRENT_CHARACTER.character = DEVICE.NEW_CHARACTER.character;
-      transition_progress = 1.0;
-      transition_complete = true;
-
-      DEVICE.CURRENT_CHARACTER.pos_x = 0.0;
-      DEVICE.CURRENT_CHARACTER.pos_y = 0.0;
-      DEVICE.CURRENT_CHARACTER.scale_x = 1.0;
-      DEVICE.CURRENT_CHARACTER.scale_y = 1.0;
-      DEVICE.CURRENT_CHARACTER.rotation = 0.0;
-
-      DEVICE.NEW_CHARACTER.pos_x = 0.0;
-      DEVICE.NEW_CHARACTER.pos_y = 0.0;
-      DEVICE.NEW_CHARACTER.scale_x = 1.0;
-      DEVICE.NEW_CHARACTER.scale_y = 1.0;
-      DEVICE.NEW_CHARACTER.rotation = 0.0;
-    }
-    
-    // Transition is running
-    else {
-      if (CONFIG.TRANSITION_TYPE == TRANSITION_FLIP_HORIZONTAL) {
-        if (transition_progress >= 0.5) {
-          DEVICE.CURRENT_CHARACTER.character = DEVICE.NEW_CHARACTER.character;
-        }
-        DEVICE.CURRENT_CHARACTER.scale_x = (get_sine_float_index(transition_progress + 0.25) / 32768.0) * 0.5 + 0.5;
-        DEVICE.NEW_CHARACTER.scale_x = DEVICE.CURRENT_CHARACTER.scale_x;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_FLIP_VERTICAL) {
-        if (transition_progress >= 0.5) {
-          DEVICE.CURRENT_CHARACTER.character = DEVICE.NEW_CHARACTER.character;
-        }
-        DEVICE.CURRENT_CHARACTER.scale_y = (get_sine_float_index(transition_progress + 0.25) / 32768.0) * 0.5 + 0.5;
-        DEVICE.NEW_CHARACTER.scale_y = DEVICE.CURRENT_CHARACTER.scale_y;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_FADE) {
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - transition_progress;
-        DEVICE.NEW_CHARACTER.opacity = transition_progress;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_FADE_OUT) {
-        if (transition_progress >= 0.5) {
-          DEVICE.CURRENT_CHARACTER.character = DEVICE.NEW_CHARACTER.character;
-        }
-        DEVICE.MASTER_OPACITY = (get_sine_float_index(transition_progress + 0.25) / 32768.0) * 0.5 + 0.5;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_SPIN_LEFT) {
-        DEVICE.CURRENT_CHARACTER.rotation = ((1.0 - ((get_sine_float_index((transition_progress * 0.5) + 0.25) / 32768.0) * 0.5 + 0.5)) * 360.0) * -1.0;
-        DEVICE.NEW_CHARACTER.rotation = DEVICE.CURRENT_CHARACTER.rotation;
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - transition_progress;
-        DEVICE.NEW_CHARACTER.opacity = transition_progress;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_SPIN_RIGHT) {
-        DEVICE.CURRENT_CHARACTER.rotation = (1.0 - ((get_sine_float_index((transition_progress * 0.5) + 0.25) / 32768.0) * 0.5 + 0.5)) * 360.0;
-        DEVICE.NEW_CHARACTER.rotation = DEVICE.CURRENT_CHARACTER.rotation;
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - transition_progress;
-        DEVICE.NEW_CHARACTER.opacity = transition_progress;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_SPIN_HALF_LEFT) {
-        DEVICE.CURRENT_CHARACTER.rotation = ((1.0 - ((get_sine_float_index((transition_progress * 0.5) + 0.25) / 32768.0) * 0.5 + 0.5)) * 180.0) * -1.0;
-        DEVICE.NEW_CHARACTER.rotation = DEVICE.CURRENT_CHARACTER.rotation - 180.0;
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - transition_progress;
-        DEVICE.NEW_CHARACTER.opacity = transition_progress;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_SPIN_HALF_RIGHT) {
-        DEVICE.CURRENT_CHARACTER.rotation = (1.0 - ((get_sine_float_index((transition_progress * 0.5) + 0.25) / 32768.0) * 0.5 + 0.5)) * 180.0;
-        DEVICE.NEW_CHARACTER.rotation = DEVICE.CURRENT_CHARACTER.rotation + 180.0;
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - transition_progress;
-        DEVICE.NEW_CHARACTER.opacity = transition_progress;
-      }
-
-      else if (CONFIG.TRANSITION_TYPE == TRANSITION_SHRINK) {
-        if (transition_progress >= 0.5) {
-          DEVICE.CURRENT_CHARACTER.character = DEVICE.NEW_CHARACTER.character;
-        }
-        DEVICE.CURRENT_CHARACTER.scale_x = (get_sine_float_index(transition_progress + 0.25) / 32768.0) * 0.5 + 0.5;
-        DEVICE.CURRENT_CHARACTER.scale_y = DEVICE.CURRENT_CHARACTER.scale_x;
-        DEVICE.NEW_CHARACTER.scale_x = DEVICE.CURRENT_CHARACTER.scale_x;
-        DEVICE.NEW_CHARACTER.scale_y = DEVICE.CURRENT_CHARACTER.scale_y;
-      }
-
-      else if (CONFIG.TRANSITION_TYPE == TRANSITION_PUSH_DOWN) {
-        float push = 1.0 - ((get_sine_float_index(transition_progress * 0.5 + 0.25) / 32768.0) * 0.5 + 0.5);
-        DEVICE.CURRENT_CHARACTER.pos_y = -22.0 * push;
-        DEVICE.NEW_CHARACTER.pos_y = DEVICE.CURRENT_CHARACTER.pos_y + 22.0;
-
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - push;
-        DEVICE.NEW_CHARACTER.opacity = 1.0;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_PUSH_UP) {
-        float push = 1.0 - ((get_sine_float_index(transition_progress * 0.5 + 0.25) / 32768.0) * 0.5 + 0.5);
-        DEVICE.CURRENT_CHARACTER.pos_y = 22.0 * push;
-        DEVICE.NEW_CHARACTER.pos_y = DEVICE.CURRENT_CHARACTER.pos_y - 22.0;
-
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - push;
-        DEVICE.NEW_CHARACTER.opacity = 1.0;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_PUSH_LEFT) {
-        float push = 1.0 - ((get_sine_float_index(transition_progress * 0.5 + 0.25) / 32768.0) * 0.5 + 0.5);
-        DEVICE.CURRENT_CHARACTER.pos_x = -15.0 * push;
-        DEVICE.NEW_CHARACTER.pos_x = DEVICE.CURRENT_CHARACTER.pos_x + 15.0;
-
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0;  //-push;
-        DEVICE.NEW_CHARACTER.opacity = 1.0;
-      } else if (CONFIG.TRANSITION_TYPE == TRANSITION_PUSH_RIGHT) {
-        float push = 1.0 - ((get_sine_float_index(transition_progress * 0.5 + 0.25) / 32768.0) * 0.5 + 0.5);
-        DEVICE.CURRENT_CHARACTER.pos_x = 15.0 * push;
-        DEVICE.NEW_CHARACTER.pos_x = DEVICE.CURRENT_CHARACTER.pos_x - 15.0;
-
-        DEVICE.CURRENT_CHARACTER.opacity = 1.0 - push;
-        DEVICE.NEW_CHARACTER.opacity = 1.0;
-      }
-    }
+  else{
+    opacity_a = 1.0;
+    opacity_b = 0.0;
   }
+
+  float fade_val = 1.0-saw_to_tri(system_state_transition_progress);
+
+  CHARACTER_STATE[!current_character_state].OPACITY = opacity_a * fade_val;
+  CHARACTER_STATE[current_character_state].OPACITY  = opacity_b * fade_val;
+}
+
+// Spin 360 left during transition
+void run_spin_left_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].ROTATION =  1.0 * (360+360*system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].ROTATION  =  1.0 * (360*system_state_transition_progress);
+}
+
+// Spin 360 right during transition
+void run_spin_right_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].ROTATION = -1.0 * (360+360*system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].ROTATION  = -1.0 * (360*system_state_transition_progress);
+}
+
+// Spin 180 left during transition
+void run_spin_left_half_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].ROTATION =  1.0 * (180+180*system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].ROTATION  =  1.0 * (180*system_state_transition_progress);
+}
+
+// Spin 180 right during transition
+void run_spin_right_half_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].ROTATION = -1.0 * (180+180*system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].ROTATION  = -1.0 * (180*system_state_transition_progress);
+}
+
+// Scroll new character up into view
+void run_push_up_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].POSITION.y = -17.0 * (1.0-system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].POSITION.y  =  17.0 * (system_state_transition_progress);
+}
+
+// Scroll new character down into view
+void run_push_down_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].POSITION.y =  17.0 * (1.0-system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].POSITION.y  = -17.0 * (system_state_transition_progress);
+}
+
+// Scroll new character left into view
+void run_push_left_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].POSITION.x =  10.0 * (1.0-system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].POSITION.x  = -10.0 * (system_state_transition_progress);
+}
+
+// Scroll new character right into view
+void run_push_right_transition(){
+  CHARACTER_STATE[!current_character_state].OPACITY = system_state_transition_progress;
+  CHARACTER_STATE[current_character_state].OPACITY = 1.0 - system_state_transition_progress;
+
+  CHARACTER_STATE[!current_character_state].POSITION.x = -10.0 * (1.0-system_state_transition_progress);
+  CHARACTER_STATE[current_character_state].POSITION.x  =  10.0 * (system_state_transition_progress);
+}
+
+// Shrink old character to point, swap the characters, then scale back up during transitions
+void run_shrink_transition(){
+  if(system_state_transition_progress < 0.5){
+    CHARACTER_STATE[!current_character_state].OPACITY = 0.0;
+    CHARACTER_STATE[current_character_state].OPACITY  = 1.0;
+  }
+  else{
+    CHARACTER_STATE[!current_character_state].OPACITY = 1.0;
+    CHARACTER_STATE[current_character_state].OPACITY  = 0.0;
+  }
+
+  float shrink_val = 1.0-saw_to_tri(system_state_transition_progress);
+
+  CHARACTER_STATE[!current_character_state].SCALE.x = shrink_val;
+  CHARACTER_STATE[!current_character_state].SCALE.y = shrink_val;
+
+  CHARACTER_STATE[current_character_state].SCALE.x = shrink_val;
+  CHARACTER_STATE[current_character_state].SCALE.y = shrink_val;
+}
+
+// Flip character horizontally to reveal new character
+void run_flip_horizontal_transition(){
+  if(system_state_transition_progress < 0.5){
+    CHARACTER_STATE[!current_character_state].OPACITY = 0.0;
+    CHARACTER_STATE[current_character_state].OPACITY  = 1.0;
+  }
+  else{
+    CHARACTER_STATE[!current_character_state].OPACITY = 1.0;
+    CHARACTER_STATE[current_character_state].OPACITY  = 0.0;
+  }
+
+  float flip_val = 1.0-saw_to_tri(system_state_transition_progress);
+
+  CHARACTER_STATE[!current_character_state].SCALE.x = flip_val;
+  //CHARACTER_STATE[!current_character_state].SCALE.y = flip_val;
+
+  CHARACTER_STATE[current_character_state].SCALE.x = flip_val;
+  //CHARACTER_STATE[current_character_state].SCALE.y = flip_val;
+}
+
+// Flip character vertically to reveal new character
+void run_flip_vertical_transition(){
+  if(system_state_transition_progress < 0.5){
+    CHARACTER_STATE[!current_character_state].OPACITY = 0.0;
+    CHARACTER_STATE[current_character_state].OPACITY  = 1.0;
+  }
+  else{
+    CHARACTER_STATE[!current_character_state].OPACITY = 1.0;
+    CHARACTER_STATE[current_character_state].OPACITY  = 0.0;
+  }
+
+  float flip_val = 1.0-saw_to_tri(system_state_transition_progress);
+
+  //CHARACTER_STATE[!current_character_state].SCALE.x = flip_val;
+  CHARACTER_STATE[!current_character_state].SCALE.y = flip_val;
+
+  //CHARACTER_STATE[current_character_state].SCALE.x = flip_val;
+  CHARACTER_STATE[current_character_state].SCALE.y = flip_val;
 }

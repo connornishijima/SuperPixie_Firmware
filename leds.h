@@ -1,210 +1,400 @@
+extern system_state SYSTEM_STATE_INTERNAL[2];
+extern system_state SYSTEM_STATE;
+extern uint8_t current_system_state;
+extern bool system_state_changed;
+
+// The array is only 15 LEDs tall, but column 4 has a 16th LED: the backlight!
+// Because of how the LEDs are addressed, this means that every other column (1-3, 5-7)
+// has a virtual 16th LED in memory that doesn't exist IRL
+#define NUM_LEDS_PER_STRIP 16
+
+// Array size, not counting the 16th row used for the backlight
 #define LEDS_X 7
 #define LEDS_Y 15
 
-CRGB leds[NUM_LEDS];
-CRGB leds_temp[NUM_LEDS];
-CRGB leds_past[NUM_LEDS];
+// The image is arranged in memory in the same shape it's arranged in real life
+CRGBF leds[LEDS_X][NUM_LEDS_PER_STRIP];   // Floating point version  [7][16]
+CRGB leds_8[LEDS_X][NUM_LEDS_PER_STRIP];  // Quantized 8-bit version [7][16]
 
-float mask_output[LEDS_Y][LEDS_X];
-float mask_output_fx[LEDS_Y][LEDS_X];
+CRGBF leds_blended[LEDS_X][NUM_LEDS_PER_STRIP];  // Output of frame blending
+CRGBF leds_last[LEDS_X][NUM_LEDS_PER_STRIP];     // Stores the last frame, used for frame blending
 
-float mask[LEDS_Y][LEDS_X];
-float character_mask[LEDS_Y][LEDS_X];
-float temp_mask[LEDS_Y][LEDS_X];
-bool searched[LEDS_Y][LEDS_X];
+CLEDController *controller[LEDS_X]; // One CLEDController object per lane
 
-uint16_t lookup_table[15][7] = {
-  { 30, 25, 20, 15, 10, 5, 0 },
-  { 31, 26, 21, 16, 11, 6, 1 },
-  { 32, 27, 22, 17, 12, 7, 2 },
-  { 33, 28, 23, 18, 13, 8, 3 },
-  { 34, 29, 24, 19, 14, 9, 4 },
+// These are the 7 GPIO pins of the LED highway
+const uint8_t led_pins[LEDS_X] = { 12, 14, 27, 26, 25, 33, 32 };
 
-  { 30 + 35, 25 + 35, 20 + 35, 15 + 35, 10 + 35, 5 + 35, 0 + 35 },
-  { 31 + 35, 26 + 35, 21 + 35, 16 + 35, 11 + 35, 6 + 35, 1 + 35 },
-  { 32 + 35, 27 + 35, 22 + 35, 17 + 35, 12 + 35, 7 + 35, 2 + 35 },
-  { 33 + 35, 28 + 35, 23 + 35, 18 + 35, 13 + 35, 8 + 35, 3 + 35 },
-  { 34 + 35, 29 + 35, 24 + 35, 19 + 35, 14 + 35, 9 + 35, 4 + 35 },
+// This is the monochrome drawing mask for the current and
+// alternate vector characters, with both used during transitions
+float character_mask[2][LEDS_X][LEDS_Y];
 
-  { 30 + 70, 25 + 70, 20 + 70, 15 + 70, 10 + 70, 5 + 70, 0 + 70 },
-  { 31 + 70, 26 + 70, 21 + 70, 16 + 70, 11 + 70, 6 + 70, 1 + 70 },
-  { 32 + 70, 27 + 70, 22 + 70, 17 + 70, 12 + 70, 7 + 70, 2 + 70 },
-  { 33 + 70, 28 + 70, 23 + 70, 18 + 70, 13 + 70, 8 + 70, 3 + 70 },
-  { 34 + 70, 29 + 70, 24 + 70, 19 + 70, 14 + 70, 9 + 70, 4 + 70 }
-};
-
-// Init LED chain
+// #############################################################################################
 void init_leds() {
-  debugln("---- init_leds()");
-  FastLED.addLeds<NEOPIXEL, LED_DATA_PIN>(leds, NUM_LEDS);  // GRB ordering is assumed
-  FastLED.setBrightness(CONFIG.BRIGHTNESS);
+  // -------------------------------------------------------------------------------------------
+  // Open all 7 seven lanes of the LED highway, allowing us to update each column of the
+  // display in parallel. By having an exceptionally short chain of WS2812B-compatible
+  // LEDs (16) split across seven GPIO at once, the frame update time becomes 6.625x faster
+  // than if all 106 LEDs were updated using only a single GPIO. This boost in speed gets
+  // your SuperPixie running at over 850 FPS, and the LEDs even get their own CPU core. This
+  // absurdly high frame rate allows for temporal dithering, a technique that tricks your eye
+  // into seeing extra levels of color resolution than is normally posssible with 8-bit LEDs
+  // like these, helping to preserve color resolution when the display is dimmed.
+
+  controller[0] = &FastLED.addLeds<WS2812B, 12, GRB>(leds_8[0], NUM_LEDS_PER_STRIP);
+  controller[1] = &FastLED.addLeds<WS2812B, 14, GRB>(leds_8[1], NUM_LEDS_PER_STRIP);
+  controller[2] = &FastLED.addLeds<WS2812B, 27, GRB>(leds_8[2], NUM_LEDS_PER_STRIP);
+  controller[3] = &FastLED.addLeds<WS2812B, 26, GRB>(leds_8[3], NUM_LEDS_PER_STRIP);
+  controller[4] = &FastLED.addLeds<WS2812B, 25, GRB>(leds_8[4], NUM_LEDS_PER_STRIP);
+  controller[5] = &FastLED.addLeds<WS2812B, 33, GRB>(leds_8[5], NUM_LEDS_PER_STRIP);
+  controller[6] = &FastLED.addLeds<WS2812B, 32, GRB>(leds_8[6], NUM_LEDS_PER_STRIP);
+
+  // -------------------------------------------------------------------------------------------
+  // Don't worry FastLED, we'll do our own dithering
+
+  FastLED.setBrightness(255);
+  FastLED.setDither(DISABLE_DITHER);
+  // -------------------------------------------------------------------------------------------
 }
+// #############################################################################################
 
-void show(uint32_t t_now) {
-  transition_complete = false;
-  transition_progress = 0.0;
-  transition_start = t_now;
-  transition_end = transition_start + CONFIG.TRANSITION_DURATION_MS * 1000;
-  mask_needs_update = true;
-  freeze_led_image = false;
+
+// #############################################################################################
+// ---------------------------------------------------------------------------------------------
+// Desaturate an input CRGBF color by a floating point amount (0.0 - 1.0)
+struct CRGBF desaturate(struct CRGBF input_color, float amount) {
+  float luminance = 0.2126 * input_color.r + 0.7152 * input_color.g + 0.0722 * input_color.b;
+  float amount_inv = 1.0 - amount;
+
+  struct CRGBF output;
+  output.r = input_color.r * amount_inv + luminance * amount;
+  output.g = input_color.g * amount_inv + luminance * amount;
+  output.b = input_color.b * amount_inv + luminance * amount;
+
+  return output;
 }
+// #############################################################################################
 
-void blur_mask(float image[LEDS_Y][LEDS_X], uint8_t blur_size) {
-  uint8_t half_blur_size = blur_size / 2;
-  uint16_t blur_area = (uint16_t)blur_size * blur_size;
 
-  for (uint8_t y = 0; y < LEDS_Y; y++) {
-    for (uint8_t x = 0; x < LEDS_X; x++) {
-      float sum = 0.0;
-      for (int8_t i = -half_blur_size; i <= half_blur_size; i++) {
-        for (int8_t j = -half_blur_size; j <= half_blur_size; j++) {
-          int8_t current_x = x + j;
-          int8_t current_y = y + i;
-          current_x = (current_x < 0) ? 0 : ((current_x >= LEDS_X) ? LEDS_X - 1 : current_x);
-          current_y = (current_y < 0) ? 0 : ((current_y >= LEDS_Y) ? LEDS_Y - 1 : current_y);
-          sum += image[current_y][current_x];
-        }
-      }
-      temp_mask[y][x] = sum / blur_area;
-      if (temp_mask[y][x] > 1.0) {
-        temp_mask[y][x] = 1.0;
-      }
-    }
-  }
+// #############################################################################################
+// ---------------------------------------------------------------------------------------------
+// Return a CRGBF color that represents a fully bright and saturated hue from the color wheel,
+// with an input range of 0.0-1.0 instead of 0 - 360deg
+struct CRGBF interpolate_hue(float hue) {
+  // Scale hue to [0, 63]
+  float hue_scaled = hue * 63.0f;
 
-  memcpy(image, temp_mask, LEDS_X * LEDS_Y * sizeof(float));
+  // Calculate index1, avoiding expensive floor() call by using typecast to int
+  int index1 = (int)hue_scaled;
+
+  // If index1 < 0, make it 0. If index1 > 63, make it 63
+  index1 = (index1 < 0 ? 0 : (index1 > 63 ? 63 : index1));
+
+  // Calculate index2, minimizing the range to [index1, index1+1]
+  int index2 = index1 + 1;
+
+  // If index2 > 63, make it 63
+  index2 = (index2 > 63 ? 63 : index2);
+
+  // Compute interpolation factor
+  float t = hue_scaled - index1;
+
+  // Linearly interpolate
+  struct CRGBF output;
+  output.r = (1.0f - t) * hue_lookup[index1][0] + t * hue_lookup[index2][0];
+  output.g = (1.0f - t) * hue_lookup[index1][1] + t * hue_lookup[index2][1];
+  output.b = (1.0f - t) * hue_lookup[index1][2] + t * hue_lookup[index2][2];
+
+  return output;
 }
+// #############################################################################################
 
-void darken_mask(float image[LEDS_Y][LEDS_X], float new_max_brightness) {
-  for (uint8_t y = 0; y < LEDS_Y; y++) {
-    for (uint8_t x = 0; x < LEDS_X; x++) {
-      image[y][x] *= new_max_brightness;
-    }
-  }
+
+// #############################################################################################
+// ---------------------------------------------------------------------------------------------
+// Return a CRGBF color that represents an input HSV color in a float range of 0.0-1.0
+struct CRGBF hsv(float h, float s, float v) {
+  h = fmod(h, 1.0);
+
+  struct CRGBF col = interpolate_hue(h);
+  col = desaturate(col, 1.0 - s);
+  col.r *= v;
+  col.g *= v;
+  col.b *= v;
+
+  return col;
 }
+// #############################################################################################
 
-CRGB get_color(uint8_t x, uint8_t y, float brightness) {
-  CRGB col_a = CONFIG.DISPLAY_COLOR_A;
-  CRGB col_b = CONFIG.DISPLAY_COLOR_B;
 
-  CRGB out_col;
+// #############################################################################################
+// ---------------------------------------------------------------------------------------------
+// Allows for blending of frames to simulate motion blur or phosphor decay
+inline void apply_frame_blending() {
+  float blend_val = 0;//.7;  //9;
 
-  // TODO: Implement "GRADIENT_CHAIN" color mode that uses LOCAL_ADDRESS vs. CHAIN_LENGTH to calculate what color each node of the chain should use in a horizontal context
-  if (CONFIG.GRADIENT_TYPE == GRADIENT_NONE) {
-    out_col.r = col_a.r;
-    out_col.g = col_a.g;
-    out_col.b = col_a.b;
-  } else if (CONFIG.GRADIENT_TYPE == GRADIENT_HORIZONTAL) {
-    float mix = x / float(LEDS_X - 1);
-    ;
-    out_col.r = col_a.r * (1.0 - mix) + col_b.r * (mix);
-    out_col.g = col_a.g * (1.0 - mix) + col_b.g * (mix);
-    out_col.b = col_a.b * (1.0 - mix) + col_b.b * (mix);
-  } else if (CONFIG.GRADIENT_TYPE == GRADIENT_VERTICAL) {
-    float mix = y / float(LEDS_Y - 1);
-    ;
-    out_col.r = col_a.r * (1.0 - mix) + col_b.r * (mix);
-    out_col.g = col_a.g * (1.0 - mix) + col_b.g * (mix);
-    out_col.b = col_a.b * (1.0 - mix) + col_b.b * (mix);
-  } else if (CONFIG.GRADIENT_TYPE == GRADIENT_BRIGHTNESS) {
-    float mix = 1.0 - brightness;
-    out_col.r = col_a.r * (1.0 - mix) + col_b.r * (mix);
-    out_col.g = col_a.g * (1.0 - mix) + col_b.g * (mix);
-    out_col.b = col_a.b * (1.0 - mix) + col_b.b * (mix);
-  }
+  if (blend_val > 0.0) {
+    // -------------------------------------------------------------------------------------------
+    // Iterate over entire matrix
+    for (uint8_t y = 0; y < LEDS_Y + 1; y++) {  // Extra row for backlight
+      for (uint8_t x = 0; x < LEDS_X; x++) {
+        float decayed_r = leds_last[x][y].r * blend_val;
+        float decayed_g = leds_last[x][y].g * blend_val;
+        float decayed_b = leds_last[x][y].b * blend_val;
 
-  return out_col;
-}
+        leds_blended[x][y].r = leds[x][y].r;
+        leds_blended[x][y].g = leds[x][y].g;
+        leds_blended[x][y].b = leds[x][y].b;
 
-void render_mask() {
-  for (uint8_t y = 0; y < LEDS_Y; y++) {
-    for (uint8_t x = 0; x < LEDS_X; x++) {
-      uint16_t index = lookup_table[y][x];
-      //---------------------------------------------------------------
-      // OUTPUT MASK
-      debug_step = 1;
-
-      float mask_val = mask_output[y][x];
-
-      float brightness = mask_val * mask_val;
-      CRGB col = get_color(x, y, brightness);
-      col.r *= brightness;
-      col.g *= brightness;
-      col.b *= brightness;
-
-      leds_temp[index] = col;
-
-      //---------------------------------------------------------------
-      // FX MASK ("ADD" blending mode)
-      debug_step = 2;
-
-      if (CONFIG.FX_OPACITY > 0.0) {
-        mask_val = mask_output_fx[y][x];
-
-        brightness = mask_val * mask_val;
-        CRGB fx_col;
-        fx_col.r = CONFIG.FX_COLOR.r * brightness;
-        fx_col.g = CONFIG.FX_COLOR.g * brightness;
-        fx_col.b = CONFIG.FX_COLOR.b * brightness;
-
-        leds_temp[index] += fx_col;
-      }
-
-      //---------------------------------------------------------------
-      // OUTPUT
-      debug_step = 3;
-
-      if (CONFIG.FRAME_BLENDING == 0.0) {
-        leds[index] = leds_temp[index];
-      } else {
-        leds[index].r = leds_past[index].r * (CONFIG.FRAME_BLENDING) + leds_temp[index].r * (1.0 - CONFIG.FRAME_BLENDING);
-        leds[index].g = leds_past[index].g * (CONFIG.FRAME_BLENDING) + leds_temp[index].g * (1.0 - CONFIG.FRAME_BLENDING);
-        leds[index].b = leds_past[index].b * (CONFIG.FRAME_BLENDING) + leds_temp[index].b * (1.0 - CONFIG.FRAME_BLENDING);
-
-        leds_past[index] = leds[index];
+        if (decayed_r > leds[x][y].r) { leds_blended[x][y].r = decayed_r; }
+        if (decayed_g > leds[x][y].g) { leds_blended[x][y].g = decayed_g; }
+        if (decayed_b > leds[x][y].b) { leds_blended[x][y].b = decayed_b; }
       }
     }
+    // -------------------------------------------------------------------------------------------
+  } else {
+    memcpy(leds_blended, leds, sizeof(CRGBF) * LEDS_X * NUM_LEDS_PER_STRIP);
+  }
+
+  memcpy(leds_last, leds_blended, sizeof(CRGBF) * LEDS_X * NUM_LEDS_PER_STRIP);
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Dims the input image by the global brightness level
+inline void apply_brightness() {
+  // -------------------------------------------------------------------------------------------
+  // Iterate over entire matrix
+  for (uint8_t y = 0; y < LEDS_Y; y++) {
+    for (uint8_t x = 0; x < LEDS_X; x++) {
+      leds[x][y].r *= SYSTEM_STATE.BRIGHTNESS;
+      leds[x][y].g *= SYSTEM_STATE.BRIGHTNESS;
+      leds[x][y].b *= SYSTEM_STATE.BRIGHTNESS;
+    }
   }
 }
+// #############################################################################################
 
-void update_leds() {
-  render_mask();
 
-  debug_step = 4;
+// #############################################################################################
+// Run temporal dithering to quantize CRGBF values to 8-bit CRGBs, before sending the image to
+// the LEDs via the LED highway pins
+inline void update_leds() {
+  // -------------------------------------------------------------------------------------------
+  // Set up timekeeping
+  static uint32_t iter = 0;
+  iter++;
+
+  // -------------------------------------------------------------------------------------------
+  // Increment the dither_index, which decides how the pixels are strategically flickered
+  // There are two fields in a checkerboard pattern, with two different indexes 180deg apart
+  dither_index += 1;
+  if (dither_index >= 8) {
+    dither_index = 0;
+  }
+  uint8_t dither_index_b = dither_index + 4;
+  if (dither_index_b >= 8) {
+    dither_index_b -= 8;
+  }
+  // -------------------------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------------------------
+  // Iterate over entire matrix
+  for (uint8_t y = 0; y < LEDS_Y + 1; y++) {  // Extra row for backlight
+    for (uint8_t x = 0; x < LEDS_X; x++) {
+      float gamma_r = leds_blended[x][y].r * leds_blended[x][y].r;  // Cheap gamma correction
+      float gamma_g = leds_blended[x][y].g * leds_blended[x][y].g;
+      float gamma_b = leds_blended[x][y].b * leds_blended[x][y].b;
+
+      uint16_t color_r_16 = gamma_r * 65535;  // Scale from floating point to 16-bit
+      uint16_t color_g_16 = gamma_g * 65535;
+      uint16_t color_b_16 = gamma_b * 65535;
+
+      uint8_t color_r_8 = color_r_16 >> 8;  // Upper 8 bits of color
+      uint8_t color_g_8 = color_g_16 >> 8;
+      uint8_t color_b_8 = color_b_16 >> 8;
+
+      uint8_t color_r_dither = (color_r_16 << 8) >> 8;  // Lower 8 bits of color
+      uint8_t color_g_dither = (color_g_16 << 8) >> 8;
+      uint8_t color_b_dither = (color_b_16 << 8) >> 8;
+
+      if (color_r_8 > 254) { color_r_8 = 254; }  // Leave room for added dither bit without overflow
+      if (color_g_8 > 254) { color_g_8 = 254; }
+      if (color_b_8 > 254) { color_b_8 = 254; }
+
+      uint8_t dither_bit = bitRead(dither_pattern[iter % 2][y], x);  // Get the checkerboard pattern
+      uint8_t dither_step_now = dither_index;
+      if (dither_bit == 1) {  // Decide which of the two dither indices to use based on the pattern
+        dither_step_now = dither_index_b;
+      }
+
+      // Set the dither bit according to the index vs. the lower 8 bits of the color
+      uint8_t dither_bit_r = 0;
+      uint8_t dither_bit_g = 0;
+      uint8_t dither_bit_b = 0;
+      if (color_r_dither > dither_steps[dither_step_now]) { dither_bit_r = 1; }
+      if (color_g_dither > dither_steps[dither_step_now]) { dither_bit_g = 1; }
+      if (color_b_dither > dither_steps[dither_step_now]) { dither_bit_b = 1; }
+
+      // Assign quantized 8-bit data to the LED
+      leds_8[x][y] = CRGB(color_r_8 + dither_bit_r, color_g_8 + dither_bit_g, color_b_8 + dither_bit_b);
+    }
+  }
+  // -------------------------------------------------------------------------------------------
+
+  // Send final dithered 8-bit image to LEDs
+  controller[0]->showLeds();
+  controller[1]->showLeds();
+  controller[2]->showLeds();
+  controller[3]->showLeds();
+  controller[4]->showLeds();
+  controller[5]->showLeds();
+  controller[6]->showLeds();
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// memset() the entire CRGBF "leds" matrix to 0
+void clear_leds() {  
+  memset(leds, 0, sizeof(CRGBF) * LEDS_X * NUM_LEDS_PER_STRIP);
   // --------------------------------------------------------
-  // TODO: Move debug led drawing to its own function
-  leds[NUM_LEDS - 1] = CRGB(0, 64 * DEVICE.TOUCH_ACTIVE, 0);
+}
+// #############################################################################################
 
-  if(DEVICE.LOCAL_ADDRESS == ADDRESS_NULL){
-    for (uint8_t i = 0; i < 7; i++) {
-      leds[((NUM_LEDS - 5) - (5 * i)) + 2] = CRGB(64, 0, 0);
+
+// #############################################################################################
+// Mark the CPU cycles elapsed between now and the last
+// call to this function, to calculate the current FPS
+void watch_fps() {
+  static uint8_t iter = 0;
+  static uint32_t cycles_last = 0;
+  uint32_t cycles_now = ESP.getCycleCount();
+
+  uint32_t cycles_elapsed = cycles_now - cycles_last;
+
+  iter++;
+  if (iter % 10 == 0) {  // Every time that uint8_t wraps to zero
+    float FPS = float(F_CPU) / cycles_elapsed;
+    Serial.println(FPS, 3);
+  }
+
+  cycles_last = cycles_now;
+  // -------------------------------------------------------------------------------------------
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Converts a monochromatic character mask to an RGB image using solid colors or gradients
+void draw_mask_to_leds(float draw_mask[LEDS_X][LEDS_Y]) {
+  for (uint8_t x = 0; x < LEDS_X; x++) {
+    for (uint8_t y = 0; y < LEDS_Y; y++) {
+      leds[x][y].r = add_clipped_float(leds[x][y].r, draw_mask[x][y] * SYSTEM_STATE.DISPLAY_COLOR_A.r);
+      leds[x][y].g = add_clipped_float(leds[x][y].g, draw_mask[x][y] * SYSTEM_STATE.DISPLAY_COLOR_A.g);
+      leds[x][y].b = add_clipped_float(leds[x][y].b, draw_mask[x][y] * SYSTEM_STATE.DISPLAY_COLOR_A.b);
     }
   }
-  else if (DEVICE.LOCAL_ADDRESS < 7) {
-    for (uint8_t i = 0; i < DEVICE.LOCAL_ADDRESS + 1; i++) {
-      leds[((NUM_LEDS - 5) - (5 * i)) + 2] = CRGB(0, 128, 0);
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Set the color of text/icons on the screen
+void set_display_color(CRGBF color_a, CRGBF color_b) {
+  SYSTEM_STATE_INTERNAL[!current_system_state].DISPLAY_COLOR_A = color_a;
+  SYSTEM_STATE_INTERNAL[!current_system_state].DISPLAY_COLOR_B = color_b;
+  system_state_changed = true;
+}
+
+void set_display_color(CRGBF color) {
+  set_display_color(color, color);
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Set the color of the background
+void set_display_background_color(CRGBF color_a, CRGBF color_b) {
+  SYSTEM_STATE_INTERNAL[!current_system_state].DISPLAY_BACKGROUND_COLOR_A = color_a;
+  SYSTEM_STATE_INTERNAL[!current_system_state].DISPLAY_BACKGROUND_COLOR_B = color_b;
+  system_state_changed = true;
+}
+
+void set_display_background_color(CRGBF color) {
+  set_display_background_color(color, color);
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Set the color of the backlight
+void set_backlight_color(CRGBF color) {
+  SYSTEM_STATE_INTERNAL[!current_system_state].BACKLIGHT_COLOR = color;
+  system_state_changed = true;
+}
+// #############################################################################################
+
+// #############################################################################################
+// Sets the backlight brightness independently of the display
+void set_backlight_brightness(float brightness_value) {
+  SYSTEM_STATE_INTERNAL[!current_system_state].BACKLIGHT_BRIGHTNESS = brightness_value;
+  system_state_changed = true;
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Set the brightness of the screen
+void set_brightness(float brightness_value) {
+  SYSTEM_STATE_INTERNAL[!current_system_state].BRIGHTNESS = brightness_value;
+  system_state_changed = true;
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Update the backlight color during frame updates
+void draw_backlight() {
+  leds[3][15].r = SYSTEM_STATE.BACKLIGHT_COLOR.r * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS;
+  leds[3][15].g = SYSTEM_STATE.BACKLIGHT_COLOR.g * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS;
+  leds[3][15].b = SYSTEM_STATE.BACKLIGHT_COLOR.b * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS;
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Draws the background color/gradient to the LED image during frame updates
+void draw_background_gradient(){
+  for(uint8_t y = 0; y < LEDS_Y; y++){
+
+    float blend_val = (y/float(LEDS_Y - 1));
+
+    CRGBF row_color = interpolate_CRGBF( SYSTEM_STATE.DISPLAY_BACKGROUND_COLOR_A, SYSTEM_STATE.DISPLAY_BACKGROUND_COLOR_B, blend_val );
+
+    if(y == 0 || y == LEDS_Y-1){
+      leds[0][y].r = row_color.r * 0.5;
+      leds[0][y].g = row_color.g * 0.5;
+      leds[0][y].b = row_color.b * 0.5;
+    }
+    else{
+      leds[0][y] = row_color;
+    }
+
+    leds[1][y] = row_color;
+    leds[2][y] = row_color;
+    leds[3][y] = row_color;
+    leds[4][y] = row_color;
+    leds[5][y] = row_color;
+    
+    if(y == 0 || y == LEDS_Y-1){
+      leds[6][y].r = row_color.r * 0.5;
+      leds[6][y].g = row_color.g * 0.5;
+      leds[6][y].b = row_color.b * 0.5;
+    }
+    else{
+      leds[6][y] = row_color;
     }
   }
-
-  leds[NUM_LEDS - 31]     = CRGB(64 * DEVICE.PROPAGATION, 0, 0);
-  leds[NUM_LEDS - 31 + 5] = CRGB(64 * DEVICE.FAST_MODE, 64 * DEVICE.FAST_MODE, 0);
-
-  CRGB col = CRGB(0,0,0);
-  if(chain_left.baudRate() == 115200){
-    col = CRGB(0,0,255);
-  }
-  leds[NUM_LEDS - 31 + 10] = col;
-
-  if(debug_mode == true){
-    leds[0] = CHSV(190, 255, 255*debug_mode);
-  }
-  // --------------------------------------------------------
-
-  debug_step = 5;
-  FastLED.show();
-  debug_step = 0;
 }
-
-void clear_display() {
-  memset(mask, 0, sizeof(float) * (LEDS_X * LEDS_Y));
-}
+// #############################################################################################
