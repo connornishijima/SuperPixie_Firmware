@@ -8,6 +8,8 @@
 //----------------------------------------------------------------------+
 // #############################################################################################
 
+// TODO: Document all function definition locations that aren't in the current file 
+
 // TODO: Learn how to use AUnit or write your own unit tests for node firmware
 
 // TODO: Make firmware version available via COM_GET_VERSION packet
