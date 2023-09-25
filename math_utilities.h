@@ -127,3 +127,35 @@ float clip_float(float input){
   return output;
 }
 // #############################################################################################
+
+float interpolate_curve(float input_linear, uint8_t interpolation_type){
+  input_linear = clip_float(input_linear);
+  if(interpolation_type == LINEAR){
+    return input_linear;
+  }
+  else if(interpolation_type == EASE_IN){
+    return input_linear * input_linear;
+  }
+  else if(interpolation_type == EASE_OUT){
+    return sqrt(input_linear);
+  }
+  else if(interpolation_type == EASE_IN_SOFT){
+    return input_linear * input_linear * input_linear;
+  }
+  else if(interpolation_type == EASE_OUT_SOFT){
+    return sqrt(sqrt(input_linear));
+  }
+  else if(interpolation_type == S_CURVE){
+    float a_val = input_linear * input_linear;
+    float b_val = sqrt(input_linear);
+    return ((a_val * (1.0 - input_linear)) + (b_val * (input_linear)));
+  }
+  else if(interpolation_type == S_CURVE_SOFT){
+    float a_val = input_linear * input_linear * input_linear;
+    float b_val = sqrt(sqrt(input_linear));
+    return ((a_val * (1.0 - input_linear)) + (b_val * (input_linear)));
+  }
+  else{
+    return 0.0F;
+  }
+}

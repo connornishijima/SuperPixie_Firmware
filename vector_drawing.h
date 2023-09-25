@@ -99,9 +99,6 @@ void draw_vector_from_line_memory(uint8_t slot, float draw_mask[LEDS_X][LEDS_Y],
 // Load a vector from the compressed format in ascii.h into native floating point values
 // cached in line_memory[][] to be used by the rasterizer above
 void load_vector_to_line_memory(uint8_t slot, uint8_t* input_data, int16_t offset) {
-  memset(line_memory[slot], 0, sizeof(line) * 128);
-  line_count[slot] = 0;
-
   const uint8_t header_length = 6;
 
   int16_t num_bytes = (input_data[offset + 0] << 8) + input_data[offset + 1];
@@ -143,9 +140,12 @@ void load_vector_to_line_memory(uint8_t slot, uint8_t* input_data, int16_t offse
 // to be shown after the next transition is triggered
 void set_new_character(char character) {
   int32_t address = lookup_ascii_address(character);
+
+  memset(line_memory[!current_character_state], 0, sizeof(line) * 128);
+  line_count[!current_character_state] = 0;
+
   if (address == -1) {
-    // Fall back to ' ' character if bad ascii address
-    load_vector_to_line_memory(!current_character_state, ascii_font, 0);
+    // Draw nothing if character provided has ascii address out of range
   } else {
     load_vector_to_line_memory(!current_character_state, ascii_font, address);
   }
@@ -180,7 +180,7 @@ void run_character_transitions() {
   else if (SYSTEM_STATE_INTERNAL[!current_system_state].TRANSITION_TYPE == TRANSITION_SPIN_LEFT_HALF) {
     run_spin_left_half_transition();
   }
-  else if (SYSTEM_STATE_INTERNAL[!current_system_state].TRANSITION_TYPE == TRANSITION_SPIN_RIGHT) {
+  else if (SYSTEM_STATE_INTERNAL[!current_system_state].TRANSITION_TYPE == TRANSITION_SPIN_RIGHT_HALF) {
     run_spin_right_half_transition();
   }
   else if (SYSTEM_STATE_INTERNAL[!current_system_state].TRANSITION_TYPE == TRANSITION_PUSH_UP) {

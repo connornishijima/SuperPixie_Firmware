@@ -2,6 +2,11 @@ extern system_state SYSTEM_STATE_INTERNAL[2];
 extern system_state SYSTEM_STATE;
 extern uint8_t current_system_state;
 extern bool system_state_changed;
+extern uint32_t time_us_now;
+extern uint32_t time_ms_now;
+
+extern TaskHandle_t cpu_task;
+extern TaskHandle_t gpu_task;
 
 // The array is only 15 LEDs tall, but column 4 has a 16th LED: the backlight!
 // Because of how the LEDs are addressed, this means that every other column (1-3, 5-7)
@@ -19,14 +24,52 @@ CRGB leds_8[LEDS_X][NUM_LEDS_PER_STRIP];  // Quantized 8-bit version [7][16]
 CRGBF leds_blended[LEDS_X][NUM_LEDS_PER_STRIP];  // Output of frame blending
 CRGBF leds_last[LEDS_X][NUM_LEDS_PER_STRIP];     // Stores the last frame, used for frame blending
 
-CLEDController *controller[LEDS_X]; // One CLEDController object per lane
+CRGBF leds_debug[LEDS_X][NUM_LEDS_PER_STRIP];  // Debugging LED mask
+
+CLEDController *controller[LEDS_X];  // One CLEDController object per lane
 
 // These are the 7 GPIO pins of the LED highway
 const uint8_t led_pins[LEDS_X] = { 12, 14, 27, 26, 25, 33, 32 };
 
+float frame_blending_amount = 0.0;
+float debug_led_opacity = 0.0;
+
 // This is the monochrome drawing mask for the current and
 // alternate vector characters, with both used during transitions
 float character_mask[2][LEDS_X][LEDS_Y];
+
+bool tx_flag_left = false;
+bool tx_flag_right = false;
+
+bool rx_flag_left = false;
+bool rx_flag_right = false;
+
+bool packet_execution_flag = false;
+bool here_flag = false;
+
+bool fade_in_complete = false;
+float GLOBAL_LED_BRIGHTNESS = 0.0;
+
+bool ripple_active = false;
+uint8_t ripple_interpolation = LINEAR;
+
+CRGBF ripple_color = { 1.0, 0.0, 0.0 };
+float ripple_position = 0.0;
+float ripple_width = 0.0;
+float ripple_opacity = 0.0;
+
+CRGBF ripple_color_start = { 1.0, 0.0, 0.0 };
+float ripple_position_start = 0.0;
+float ripple_width_start = 0.0;
+float ripple_opacity_start = 0.0;
+
+CRGBF ripple_color_destination = { 1.0, 0.0, 0.0 };
+float ripple_position_destination = 0.0;
+float ripple_width_destination = 0.0;
+float ripple_opacity_destination = 0.0;
+
+uint32_t ripple_start_time = 0;
+uint32_t ripple_end_time = 0;
 
 // #############################################################################################
 void init_leds() {
@@ -54,9 +97,25 @@ void init_leds() {
   FastLED.setBrightness(255);
   FastLED.setDither(DISABLE_DITHER);
   // -------------------------------------------------------------------------------------------
+
+  memset(leds_8[0], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+  memset(leds_8[1], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+  memset(leds_8[2], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+  memset(leds_8[3], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+  memset(leds_8[4], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+  memset(leds_8[5], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+  memset(leds_8[6], 0, sizeof(CRGB) * NUM_LEDS_PER_STRIP);
+
+  // Send black image to LEDs on boot
+  controller[0]->showLeds();
+  controller[1]->showLeds();
+  controller[2]->showLeds();
+  controller[3]->showLeds();
+  controller[4]->showLeds();
+  controller[5]->showLeds();
+  controller[6]->showLeds();
 }
 // #############################################################################################
-
 
 // #############################################################################################
 // ---------------------------------------------------------------------------------------------
@@ -130,7 +189,7 @@ struct CRGBF hsv(float h, float s, float v) {
 // ---------------------------------------------------------------------------------------------
 // Allows for blending of frames to simulate motion blur or phosphor decay
 inline void apply_frame_blending() {
-  float blend_val = 0;//.7;  //9;
+  float blend_val = frame_blending_amount;
 
   if (blend_val > 0.0) {
     // -------------------------------------------------------------------------------------------
@@ -167,9 +226,9 @@ inline void apply_brightness() {
   // Iterate over entire matrix
   for (uint8_t y = 0; y < LEDS_Y; y++) {
     for (uint8_t x = 0; x < LEDS_X; x++) {
-      leds[x][y].r *= SYSTEM_STATE.BRIGHTNESS;
-      leds[x][y].g *= SYSTEM_STATE.BRIGHTNESS;
-      leds[x][y].b *= SYSTEM_STATE.BRIGHTNESS;
+      leds[x][y].r *= SYSTEM_STATE.BRIGHTNESS * GLOBAL_LED_BRIGHTNESS;
+      leds[x][y].g *= SYSTEM_STATE.BRIGHTNESS * GLOBAL_LED_BRIGHTNESS;
+      leds[x][y].b *= SYSTEM_STATE.BRIGHTNESS * GLOBAL_LED_BRIGHTNESS;
     }
   }
 }
@@ -256,8 +315,9 @@ inline void update_leds() {
 
 // #############################################################################################
 // memset() the entire CRGBF "leds" matrix to 0
-void clear_leds() {  
+void clear_leds() {
   memset(leds, 0, sizeof(CRGBF) * LEDS_X * NUM_LEDS_PER_STRIP);
+  memset(leds_debug, 0, sizeof(CRGBF) * LEDS_X * NUM_LEDS_PER_STRIP);
   // --------------------------------------------------------
 }
 // #############################################################################################
@@ -274,7 +334,7 @@ void watch_fps() {
   uint32_t cycles_elapsed = cycles_now - cycles_last;
 
   iter++;
-  if (iter % 10 == 0) {  // Every time that uint8_t wraps to zero
+  if (iter % 10 == 0) {
     float FPS = float(F_CPU) / cycles_elapsed;
     Serial.println(FPS, 3);
   }
@@ -286,13 +346,82 @@ void watch_fps() {
 
 
 // #############################################################################################
+// Get the free heap and occasionally print it
+void watch_heap() {
+  static uint8_t iter = 0;
+  iter++;
+
+  if (iter % 100 == 0) {
+    uint32_t free_heap_size = esp_get_free_heap_size();
+    debug("FREE HEAP: ");
+    debugln(free_heap_size);
+  }
+}
+// #############################################################################################
+
+
+// #############################################################################################
+// Get the free stack and occasionally print it
+void watch_stack() {
+  static uint8_t iter = 0;
+  iter++;
+
+  if (iter % 100 == 0) {
+    //uint32_t free_heap_size = esp_get_free_heap_size();
+    uint32_t free_stack_size = uxTaskGetStackHighWaterMark(gpu_task);
+    debug("FREE STACK: ");
+    debugln(free_stack_size);
+  }
+}
+// #############################################################################################
+
+
+CRGBF get_gradient_color(uint8_t x, uint8_t y, float draw_mask[LEDS_X][LEDS_Y]) {
+  uint8_t gradient_type = SYSTEM_STATE_INTERNAL[!current_system_state].DISPLAY_GRADIENT_TYPE;
+  CRGBF out_color = { 0.0, 0.0, 0.0 };
+
+  if (gradient_type == GRADIENT_NONE) {
+    out_color = SYSTEM_STATE.DISPLAY_COLOR_A;
+  } else if (gradient_type == GRADIENT_VERTICAL) {
+    float mix = y / float(LEDS_Y - 1);
+    out_color.r = SYSTEM_STATE.DISPLAY_COLOR_A.r * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.r * (1.0 - mix);
+    out_color.g = SYSTEM_STATE.DISPLAY_COLOR_A.g * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.g * (1.0 - mix);
+    out_color.b = SYSTEM_STATE.DISPLAY_COLOR_A.b * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.b * (1.0 - mix);
+  } else if (gradient_type == GRADIENT_VERTICAL_MIRRORED) {
+    float mix = saw_to_tri(y / float(LEDS_Y - 1));
+    out_color.r = SYSTEM_STATE.DISPLAY_COLOR_A.r * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.r * (1.0 - mix);
+    out_color.g = SYSTEM_STATE.DISPLAY_COLOR_A.g * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.g * (1.0 - mix);
+    out_color.b = SYSTEM_STATE.DISPLAY_COLOR_A.b * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.b * (1.0 - mix);
+  } else if (gradient_type == GRADIENT_HORIZONTAL) {
+    float mix = x / float(LEDS_X - 1);
+    out_color.r = SYSTEM_STATE.DISPLAY_COLOR_A.r * (1.0 - mix) + SYSTEM_STATE.DISPLAY_COLOR_B.r * (mix);
+    out_color.g = SYSTEM_STATE.DISPLAY_COLOR_A.g * (1.0 - mix) + SYSTEM_STATE.DISPLAY_COLOR_B.g * (mix);
+    out_color.b = SYSTEM_STATE.DISPLAY_COLOR_A.b * (1.0 - mix) + SYSTEM_STATE.DISPLAY_COLOR_B.b * (mix);
+  } else if (gradient_type == GRADIENT_HORIZONTAL_MIRRORED) {
+    float mix = saw_to_tri(x / float(LEDS_X - 1));
+    out_color.r = SYSTEM_STATE.DISPLAY_COLOR_A.r * (1.0 - mix) + SYSTEM_STATE.DISPLAY_COLOR_B.r * (mix);
+    out_color.g = SYSTEM_STATE.DISPLAY_COLOR_A.g * (1.0 - mix) + SYSTEM_STATE.DISPLAY_COLOR_B.g * (mix);
+    out_color.b = SYSTEM_STATE.DISPLAY_COLOR_A.b * (1.0 - mix) + SYSTEM_STATE.DISPLAY_COLOR_B.b * (mix);
+  } else if (gradient_type == GRADIENT_BRIGHTNESS) {
+    float mix = draw_mask[x][y];
+    out_color.r = SYSTEM_STATE.DISPLAY_COLOR_A.r * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.r * (1.0 - mix);
+    out_color.g = SYSTEM_STATE.DISPLAY_COLOR_A.g * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.g * (1.0 - mix);
+    out_color.b = SYSTEM_STATE.DISPLAY_COLOR_A.b * (mix) + SYSTEM_STATE.DISPLAY_COLOR_B.b * (1.0 - mix);
+  }
+
+  return out_color;
+}
+
+
+// #############################################################################################
 // Converts a monochromatic character mask to an RGB image using solid colors or gradients
 void draw_mask_to_leds(float draw_mask[LEDS_X][LEDS_Y]) {
   for (uint8_t x = 0; x < LEDS_X; x++) {
     for (uint8_t y = 0; y < LEDS_Y; y++) {
-      leds[x][y].r = add_clipped_float(leds[x][y].r, draw_mask[x][y] * SYSTEM_STATE.DISPLAY_COLOR_A.r);
-      leds[x][y].g = add_clipped_float(leds[x][y].g, draw_mask[x][y] * SYSTEM_STATE.DISPLAY_COLOR_A.g);
-      leds[x][y].b = add_clipped_float(leds[x][y].b, draw_mask[x][y] * SYSTEM_STATE.DISPLAY_COLOR_A.b);
+      CRGBF col_here = get_gradient_color(x, y, draw_mask);
+      leds[x][y].r = add_clipped_float(leds[x][y].r, draw_mask[x][y] * col_here.r);
+      leds[x][y].g = add_clipped_float(leds[x][y].g, draw_mask[x][y] * col_here.g);
+      leds[x][y].b = add_clipped_float(leds[x][y].b, draw_mask[x][y] * col_here.b);
     }
   }
 }
@@ -311,6 +440,14 @@ void set_display_color(CRGBF color) {
   set_display_color(color, color);
 }
 // #############################################################################################
+
+
+// #############################################################################################
+// Set the type of gradient used for drawing characters
+void set_gradient_type(uint8_t type) {
+  SYSTEM_STATE_INTERNAL[!current_system_state].DISPLAY_GRADIENT_TYPE = type;
+  system_state_changed = true;
+}
 
 
 // #############################################################################################
@@ -356,28 +493,27 @@ void set_brightness(float brightness_value) {
 // #############################################################################################
 // Update the backlight color during frame updates
 void draw_backlight() {
-  leds[3][15].r = SYSTEM_STATE.BACKLIGHT_COLOR.r * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS;
-  leds[3][15].g = SYSTEM_STATE.BACKLIGHT_COLOR.g * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS;
-  leds[3][15].b = SYSTEM_STATE.BACKLIGHT_COLOR.b * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS;
+  leds[3][15].r = SYSTEM_STATE.BACKLIGHT_COLOR.r * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS * GLOBAL_LED_BRIGHTNESS;
+  leds[3][15].g = SYSTEM_STATE.BACKLIGHT_COLOR.g * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS * GLOBAL_LED_BRIGHTNESS;
+  leds[3][15].b = SYSTEM_STATE.BACKLIGHT_COLOR.b * SYSTEM_STATE.BACKLIGHT_BRIGHTNESS * GLOBAL_LED_BRIGHTNESS;
 }
 // #############################################################################################
 
 
 // #############################################################################################
 // Draws the background color/gradient to the LED image during frame updates
-void draw_background_gradient(){
-  for(uint8_t y = 0; y < LEDS_Y; y++){
+void draw_background_gradient() {
+  for (uint8_t y = 0; y < LEDS_Y; y++) {
 
-    float blend_val = (y/float(LEDS_Y - 1));
+    float blend_val = (y / float(LEDS_Y - 1));
 
-    CRGBF row_color = interpolate_CRGBF( SYSTEM_STATE.DISPLAY_BACKGROUND_COLOR_A, SYSTEM_STATE.DISPLAY_BACKGROUND_COLOR_B, blend_val );
+    CRGBF row_color = interpolate_CRGBF(SYSTEM_STATE.DISPLAY_BACKGROUND_COLOR_A, SYSTEM_STATE.DISPLAY_BACKGROUND_COLOR_B, blend_val);
 
-    if(y == 0 || y == LEDS_Y-1){
+    if (y == 0 || y == LEDS_Y - 1) {
       leds[0][y].r = row_color.r * 0.5;
       leds[0][y].g = row_color.g * 0.5;
       leds[0][y].b = row_color.b * 0.5;
-    }
-    else{
+    } else {
       leds[0][y] = row_color;
     }
 
@@ -386,15 +522,159 @@ void draw_background_gradient(){
     leds[3][y] = row_color;
     leds[4][y] = row_color;
     leds[5][y] = row_color;
-    
-    if(y == 0 || y == LEDS_Y-1){
+
+    if (y == 0 || y == LEDS_Y - 1) {
       leds[6][y].r = row_color.r * 0.5;
       leds[6][y].g = row_color.g * 0.5;
       leds[6][y].b = row_color.b * 0.5;
-    }
-    else{
+    } else {
       leds[6][y] = row_color;
     }
   }
 }
 // #############################################################################################
+
+
+void fade_out_during_delay_ms(uint16_t del_time_ms) {
+  uint32_t t_start = millis();
+  uint32_t t_end = t_start + del_time_ms;
+
+  while (millis() < t_end) {
+    float progress = (millis() - t_start) / float(del_time_ms - 10);
+    if (progress > 1.0) { progress = 1.0; }
+
+    GLOBAL_LED_BRIGHTNESS = 1.0 - progress;
+  }
+}
+
+
+void run_ripple() {
+  float progress = (time_us_now - ripple_start_time) / float(ripple_end_time - ripple_start_time);
+  if (progress > 1.0) {
+    progress = 1.0;
+  }
+
+  if (ripple_interpolation == LINEAR) {
+    // Nothing
+  } else if (ripple_interpolation == EASE_IN) {
+    progress *= progress;
+  } else if (ripple_interpolation == EASE_OUT) {
+    progress = sqrt(progress);
+  } else if (ripple_interpolation == EASE_IN_SOFT) {
+    progress *= progress;
+    progress *= progress;
+  } else if (ripple_interpolation == EASE_OUT_SOFT) {
+    progress = sqrt(progress);
+    progress = sqrt(progress);
+  }
+
+  ripple_color = interpolate_CRGBF(ripple_color_start, ripple_color_destination, progress);
+  ripple_position = interpolate_float(ripple_position_start, ripple_position_destination, progress);
+  ripple_width = interpolate_float(ripple_width_start, ripple_width_destination, progress);
+  ripple_opacity = interpolate_float(ripple_opacity_start, ripple_opacity_destination, progress);
+}
+
+void draw_ripple() {
+  if (ripple_active == true) {
+    if (time_us_now <= ripple_end_time) {
+      run_ripple();
+
+      for (uint8_t y = 0; y < LEDS_Y; y++) {
+        float y_dist = fabs(y - ripple_position);
+        if (y_dist <= ripple_width) {
+          float proximity = 1.0 - (y_dist / ripple_width);  // (0.0 is farthest, 1.0 is closest)
+
+          CRGBF out_col = ripple_color;
+          float brightness = (proximity * ripple_opacity);
+          out_col.r *= brightness;
+          out_col.g *= brightness;
+          out_col.b *= brightness;
+
+          for (uint8_t x = 0; x < LEDS_X; x++) {
+            leds[x][y] = add_clipped_CRGBF(leds[x][y], out_col);
+          }
+        }
+      }
+    } else {
+      ripple_active = false;  // Move is complete
+    }
+  }
+}
+
+void spawn_ripple(CRGBF r_color_start, CRGBF r_color_destination, uint8_t interpolation_type, uint16_t duration_ms, float r_position_start, float r_width_start, float r_opacity_start, float r_position_destination, float r_width_destination, float r_opacity_destination) {
+  ripple_active = true;
+  ripple_color_start = r_color_start;
+  ripple_color_destination = r_color_destination;
+
+  ripple_interpolation = interpolation_type;
+
+  ripple_position_start = r_position_start;
+  ripple_width_start = r_width_start;
+  ripple_opacity_start = r_opacity_start;
+  ripple_position_destination = r_position_destination;
+  ripple_width_destination = r_width_destination;
+  ripple_opacity_destination = r_opacity_destination;
+
+  ripple_start_time = time_us_now;
+  ripple_end_time = ripple_start_time + (duration_ms * 1000);
+}
+
+void draw_touch() {
+  if (time_ms_now >= 500) {
+    static float touch_strength_smooth = 0.0;
+    static float touch_strength_smoother = 0.0;
+
+    float touch_strength = clip_float(1.0 - clip_float((SYSTEM_STATE.TOUCH_VALUE - STORAGE.TOUCH_LOW_LEVEL) / (STORAGE.TOUCH_HIGH_LEVEL - STORAGE.TOUCH_LOW_LEVEL)));
+
+    touch_strength_smooth = touch_strength * 0.05 + touch_strength_smooth * 0.95;
+    touch_strength_smoother = touch_strength_smooth * 0.95 + touch_strength_smoother * 0.05;
+
+    /*
+    debug("TOUCH: ");
+    debug(STORAGE.TOUCH_LOW_LEVEL);
+    debug(" / ");
+    debug(SYSTEM_STATE.TOUCH_VALUE);
+    debug(" / ");
+    debug(STORAGE.TOUCH_HIGH_LEVEL);
+    debug(" \t ");
+    debug(touch_strength);
+    debug(" \t ");
+    debug(touch_strength_smooth);
+    debug(" \t ");
+    debug(touch_strength_smoother);
+    debug(" \t ");
+    debugln(STORAGE.TOUCH_THRESHOLD);
+    */
+
+    if (touch_strength_smooth > 0.01) {
+      float dimming = (0.35 + 0.65 * (1.0 - touch_strength_smoother));
+
+      for (uint8_t y = 0; y < LEDS_Y; y++) {
+        for (uint8_t x = 0; x < LEDS_X; x++) {
+          leds[x][y] = desaturate(leds[x][y], touch_strength_smoother);
+          leds[x][y].r *= dimming;
+          leds[x][y].g *= dimming;
+          leds[x][y].b *= dimming;
+        }
+      }
+
+      for (uint8_t y = 0; y < LEDS_Y; y++) {
+        float height = y / float(LEDS_Y - 1);
+        if (SYSTEM_STATE.TOUCH_GLOW_POSITION == BOTTOM) {
+          height = 1.0 - height;
+        }
+
+        height *= height;
+        height *= height;
+        height *= height;
+        height *= height;
+
+        for (uint8_t x = 0; x < LEDS_X; x++) {
+          leds[x][y] = interpolate_CRGBF(leds[x][y], SYSTEM_STATE.TOUCH_COLOR, height * touch_strength_smoother);
+        }
+      }
+
+      leds[3][15] = interpolate_CRGBF(leds[3][15], SYSTEM_STATE.TOUCH_COLOR, touch_strength_smoother);
+    }
+  }
+}
